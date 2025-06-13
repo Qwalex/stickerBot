@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  stickerbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: stickerbot
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+    # Без использования volumes, как указано в требованиях 

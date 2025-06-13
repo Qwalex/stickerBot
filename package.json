@@ -1,21 +1,21 @@
 {
   "name": "stickerbot",
   "version": "1.0.0",
-  "description": "Сервис для отслеживания изменений в данных и отправки уведомлений в Telegram",
+  "description": "Telegram bot for StickerDom notifications",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "test-api": "node test-api.js"
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "node-telegram-bot-api": "^0.64.0",
-    "dotenv": "^16.3.1",
-    "node-cache": "^5.1.2",
-    "deep-equal": "^2.2.3",
     "axios": "^1.6.2",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "deep-equal": "^2.2.3",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "node-cache": "^5.1.2",
+    "node-telegram-bot-api": "^0.64.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
