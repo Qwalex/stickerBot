@@ -10,22 +10,29 @@ const cors = require('cors');
 const app = express();
 const port = process.env.PORT || 3001;
 
+// Добавляем middleware для парсинга тела запроса
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
+
+// Настройка CORS - разрешаем все источники для тестирования
+app.use(cors());
+
+// Обработчик для корневого URL - должен быть определен в начале для проверки развертывания
+app.get('/', (req, res) => {
+  res.send('StickerBot API работает!');
+});
+
+// Проверка здоровья системы для мониторинга
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
 // Пути к файлам
 const chatIdsFilePath = path.join(__dirname, 'chatIds.json');
 const dataFilePath = path.join(__dirname, 'data.json');
 
 // ID администраторов бота (для доступа к команде /chats)
 const adminIds = [];
-
-// Настройка CORS для домена stickerdom.store
-const corsOptions = {
-  origin: 'https://stickerdom.store',
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
-};
-
-app.use(cors(corsOptions));
 
 // Инициализация кеша
 const cache = new NodeCache({ stdTTL: 0, checkperiod: 0 }); // Бесконечное время хранения
@@ -85,7 +92,7 @@ function getCollectionButtonsMarkup(id) {
       [
         {
           text: '📲 Открыть в StickerDom',
-          url: `https://t.me/sticker_bot/app?startapp=collection_${id}`
+          url: `https://web.telegram.org/k/#?tgaddr=tg%3A%2F%2Fresolve%3Fdomain%3Dsticker_bot%26startapp`
         }
       ],
       [
@@ -488,10 +495,13 @@ if (telegramToken) {
       // Обновляем кеш
       cache.set('lastData', lastData);
       
+      // Сохраняем обновленные данные в файл
+      const saveResult = saveData(lastData);
+      
       // Сообщаем об успешном удалении
       bot.sendMessage(
         chatId, 
-        `✅ *Коллекция успешно удалена из кеша*\n\nID: ${collectionId}\nНазвание: ${removedCollection.title || 'Без названия'}\n\nПри следующем обновлении данных эта коллекция будет обнаружена как новая.`, 
+        `✅ *Коллекция успешно удалена*\n\nID: ${collectionId}\nНазвание: ${removedCollection.title || 'Без названия'}\n\nОбновлено: кэш ${saveResult ? 'и файл data.json' : '(ошибка сохранения файла)'}\n\nПри следующем обновлении данных эта коллекция будет обнаружена как новая.`, 
         { parse_mode: 'Markdown' }
       );
       
@@ -638,52 +648,59 @@ if (telegramToken) {
         }
         
         // Отправляем подтверждение
-        bot.answerCallbackQuery(query.id, { text: "Уведомление отмечено как прочитанное" });
+        bot.answerCallbackQuery(query.id, { text: "Напоминания удалены" });
         
-        // Обновляем текст текущего сообщения, чтобы показать, что оно прочитано
-        bot.editMessageReplyMarkup(
-          {
-            inline_keyboard: [
-              [
-                { text: '📲 Открыть в StickerDom', url: `https://t.me/sticker_bot/app?startapp=collection_${collectionId}` }
-              ]
-            ]
-          },
-          {
-            chat_id: chatId,
-            message_id: query.message.message_id
-          }
-        );
+        // Получаем список ID сообщений-напоминаний
+        const reminderMessageIds = unreadNotifications[notificationKey].reminderMessageIds || [];
+        // ID оригинальных сообщений
+        const originalMessageIds = unreadNotifications[notificationKey].originalMessageIds || [];
         
-        // Обновляем все связанные сообщения, если они есть
-        const messageIds = unreadNotifications[notificationKey].messageIds || [];
-        messageIds.forEach(msgId => {
-          if (msgId !== query.message.message_id) { // Не обновляем текущее сообщение дважды
-            bot.editMessageReplyMarkup(
-              {
-                inline_keyboard: [
-                  [
-                    { text: '📲 Открыть в StickerDom', url: `https://t.me/sticker_bot/app?startapp=collection_${collectionId}` }
+        console.log(`Удаляем напоминания: ${reminderMessageIds.length} сообщений`);
+        
+        // Удаляем только сообщения-напоминания
+        const deletionPromises = reminderMessageIds
+          .map(msgId => {
+            return bot.deleteMessage(chatId, msgId)
+              .catch(err => {
+                console.log(`Не удалось удалить напоминание ${msgId}: ${err.message}`);
+              });
+          });
+        
+        // После удаления напоминаний, обновляем клавиатуры оригинальных сообщений
+        Promise.all(deletionPromises)
+          .then(() => {
+            // Обновляем все оригинальные сообщения
+            const updatePromises = originalMessageIds.map(msgId => {
+              return bot.editMessageReplyMarkup(
+                {
+                  inline_keyboard: [
+                    [
+                      { text: '📲 Открыть в StickerDom', url: `https://web.telegram.org/k/#?tgaddr=tg%3A%2F%2Fresolve%3Fdomain%3Dsticker_bot%26startapp` }
+                    ]
                   ]
-                ]
-              },
-              {
-                chat_id: chatId,
-                message_id: msgId
-              }
-            ).catch(err => {
-              console.log(`Не удалось обновить сообщение ${msgId}: ${err.message}`);
+                },
+                {
+                  chat_id: chatId,
+                  message_id: msgId
+                }
+              ).catch(err => {
+                console.log(`Не удалось обновить оригинальное сообщение ${msgId}: ${err.message}`);
+              });
             });
-          }
-        });
+            
+            return Promise.all(updatePromises);
+          })
+          .catch(err => {
+            console.log(`Произошла ошибка при обработке нажатия кнопки: ${err.message}`);
+          });
         
         // Удаляем информацию о непрочитанном уведомлении
         delete unreadNotifications[notificationKey];
         cache.set('unreadNotifications', unreadNotifications);
         
-        console.log(`Уведомление о коллекции ${collectionId} отмечено как прочитанное пользователем ${query.from.username || query.from.first_name} (ID: ${query.from.id})`);
+        console.log(`Напоминания о коллекции ${collectionId} удалены пользователем ${query.from.username || query.from.first_name} (ID: ${query.from.id})`);
       } else {
-        bot.answerCallbackQuery(query.id, { text: "Уведомление уже отмечено как прочитанное" });
+        bot.answerCallbackQuery(query.id, { text: "Напоминания уже были удалены" });
       }
       return;
     }
@@ -766,7 +783,7 @@ if (telegramToken) {
               caption: `Логотип коллекции "${collection.title}"`,
               reply_markup: {
                 inline_keyboard: [
-                  [{ text: '📲 Открыть в StickerDom', url: `https://t.me/sticker_bot/app?startapp=collection_${collectionId}` }]
+                  [{ text: '📲 Открыть в StickerDom', url: `https://web.telegram.org/k/#?tgaddr=tg%3A%2F%2Fresolve%3Fdomain%3Dsticker_bot%26startapp` }]
                 ]
               }
             });
@@ -790,8 +807,7 @@ if (telegramToken) {
   console.warn('TELEGRAM_BOT_TOKEN не указан в .env файле, уведомления не будут отправляться');
 }
 
-// Middleware для обработки JSON
-app.use(express.json({ limit: '10mb' }));
+// API эндпоинты
 
 // Эндпоинт для приема данных
 app.post('/api/data', (req, res) => {
@@ -1028,8 +1044,12 @@ function sendNewCollectionsNotification(chatId, newCollections) {
         collection,
         chatId,
         notificationCount: 0,
+        startTime: Date.now(), // Добавляем время начала отправки уведомлений
         intervalId: null,
-        messageIds: [] // Для хранения ID всех сообщений, связанных с этим уведомлением
+        messageIds: [], // Для хранения ID всех сообщений, связанных с этим уведомлением
+        originalMessageIds: [], // Для хранения ID оригинальных сообщений (начальное уведомление и фото)
+        reminderMessageIds: [], // Для хранения ID сообщений-напоминаний
+        lastReminderMessageId: null // Для хранения ID последнего сообщения-напоминания
       };
       cache.set('unreadNotifications', unreadNotifications);
       
@@ -1040,7 +1060,7 @@ function sendNewCollectionsNotification(chatId, newCollections) {
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '📲 Открыть в StickerDom', url: `https://t.me/sticker_bot/app?startapp=collection_${collection.id}` }
+              { text: '📲 Открыть в StickerDom', url: `https://web.telegram.org/k/#?tgaddr=tg%3A%2F%2Fresolve%3Fdomain%3Dsticker_bot%26startapp` }
             ],
             [
               { text: '✅ Прочитано', callback_data: readButtonId }
@@ -1052,6 +1072,7 @@ function sendNewCollectionsNotification(chatId, newCollections) {
         const unreadNotifications = cache.get('unreadNotifications');
         if (unreadNotifications[`${chatId}_${collection.id}`]) {
           unreadNotifications[`${chatId}_${collection.id}`].messageIds.push(sentMessage.message_id);
+          unreadNotifications[`${chatId}_${collection.id}`].originalMessageIds.push(sentMessage.message_id); // Сохраняем как оригинальное сообщение
           cache.set('unreadNotifications', unreadNotifications);
         }
         
@@ -1063,7 +1084,7 @@ function sendNewCollectionsNotification(chatId, newCollections) {
             parse_mode: 'Markdown',
             reply_markup: {
               inline_keyboard: [
-                [{ text: '📲 Открыть в StickerDom', url: `https://t.me/sticker_bot/app?startapp=collection_${collection.id}` }],
+                [{ text: '📲 Открыть в StickerDom', url: `https://web.telegram.org/k/#?tgaddr=tg%3A%2F%2Fresolve%3Fdomain%3Dsticker_bot%26startapp` }],
                 [{ text: '✅ Прочитано', callback_data: readButtonId }]
               ]
             }
@@ -1072,6 +1093,7 @@ function sendNewCollectionsNotification(chatId, newCollections) {
             const unreadNotifications = cache.get('unreadNotifications');
             if (unreadNotifications[`${chatId}_${collection.id}`]) {
               unreadNotifications[`${chatId}_${collection.id}`].messageIds.push(photoMessage.message_id);
+              unreadNotifications[`${chatId}_${collection.id}`].originalMessageIds.push(photoMessage.message_id); // Сохраняем как оригинальное сообщение
               cache.set('unreadNotifications', unreadNotifications);
             }
           });
@@ -1092,29 +1114,63 @@ function sendNewCollectionsNotification(chatId, newCollections) {
             // Увеличиваем счетчик уведомлений
             notificationData.notificationCount++;
             
-            // Отправляем повторное уведомление
-            bot.sendMessage(chatId, 
-              `⚠️ *НАПОМИНАНИЕ: НОВАЯ КОЛЛЕКЦИЯ!*\n\nКоллекция "${escapeMarkdown(collection.title)}" была добавлена.\nЭто напоминание №${notificationData.notificationCount}`, {
-              parse_mode: 'Markdown',
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    { text: '📲 Открыть в StickerDom', url: `https://t.me/sticker_bot/app?startapp=collection_${collection.id}` }
-                  ],
-                  [
-                    { text: '✅ Прочитано', callback_data: readButtonId }
+            // Получаем время, прошедшее с начала отправки уведомлений
+            const elapsedTime = Math.floor((Date.now() - notificationData.startTime) / 1000);
+            const minutes = Math.floor(elapsedTime / 60);
+            const seconds = elapsedTime % 60;
+            const timeString = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+            
+            // Функция для отправки нового сообщения
+            const sendNewReminder = () => {
+              // Отправляем повторное уведомление
+              bot.sendMessage(chatId, 
+                `⚠️ *НАПОМИНАНИЕ: НОВАЯ КОЛЛЕКЦИЯ!*\n\nКоллекция "${escapeMarkdown(collection.title)}" была добавлена.\nЭто напоминание №${notificationData.notificationCount} (время с начала: ${timeString})`, {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                  inline_keyboard: [
+                    [
+                      { text: '📲 Открыть в StickerDom', url: `https://web.telegram.org/k/#?tgaddr=tg%3A%2F%2Fresolve%3Fdomain%3Dsticker_bot%26startapp` }
+                    ],
+                    [
+                      { text: '✅ Прочитано', callback_data: readButtonId }
+                    ]
                   ]
-                ]
-              }
-            }).then((reminderMessage) => {
-              // Сохраняем ID напоминания
-              const currentNotifications = cache.get('unreadNotifications') || {};
-              if (currentNotifications[`${chatId}_${collection.id}`]) {
-                currentNotifications[`${chatId}_${collection.id}`].messageIds.push(reminderMessage.message_id);
-                cache.set('unreadNotifications', currentNotifications);
-              }
-            });
-          }, 2000); // Интервал в 2 секунды
+                }
+              }).then((reminderMessage) => {
+                // Сохраняем ID напоминания
+                const currentNotifications = cache.get('unreadNotifications') || {};
+                if (currentNotifications[`${chatId}_${collection.id}`]) {
+                  currentNotifications[`${chatId}_${collection.id}`].messageIds.push(reminderMessage.message_id);
+                  currentNotifications[`${chatId}_${collection.id}`].reminderMessageIds.push(reminderMessage.message_id); // Сохраняем как сообщение-напоминание
+                  currentNotifications[`${chatId}_${collection.id}`].lastReminderMessageId = reminderMessage.message_id; // Сохраняем ID последнего сообщения
+                  cache.set('unreadNotifications', currentNotifications);
+                }
+                console.log(`Отправлено новое напоминание №${notificationData.notificationCount}, ID: ${reminderMessage.message_id}`);
+              }).catch(error => {
+                console.error(`Ошибка при отправке напоминания: ${error.message}`);
+              });
+            };
+            
+            // Удаляем предыдущее сообщение-напоминание, если оно существует
+            if (notificationData.lastReminderMessageId) {
+              console.log(`Пытаемся удалить сообщение ${notificationData.lastReminderMessageId}`);
+              
+              bot.deleteMessage(chatId, notificationData.lastReminderMessageId)
+                .then(() => {
+                  console.log(`Успешно удалено сообщение ${notificationData.lastReminderMessageId}`);
+                  // Отправляем новое сообщение после успешного удаления
+                  setTimeout(sendNewReminder, 500); // Небольшая задержка перед отправкой нового
+                })
+                .catch(error => {
+                  console.log(`Не удалось удалить сообщение ${notificationData.lastReminderMessageId}: ${error.message}`);
+                  // Если не удалось удалить, все равно отправляем новое
+                  sendNewReminder();
+                });
+            } else {
+              // Если нет предыдущего сообщения, просто отправляем новое
+              sendNewReminder();
+            }
+          }, 2000); // Интервал в 8 секунд (увеличен для лучшей работы удаления)
           
           unreadNotifications[`${chatId}_${collection.id}`].intervalId = notificationData.intervalId;
           cache.set('unreadNotifications', unreadNotifications);
@@ -1172,7 +1228,7 @@ function sendCollectionsChangeNotification(chatId, changes, newCollections) {
     reply_markup: {
       inline_keyboard: [
         [{ text: '📋 Список коллекций', callback_data: 'collections_1' }],
-        [{ text: '📲 Открыть StickerDom', url: 'https://t.me/sticker_bot/app' }]
+        [{ text: '📲 Открыть StickerDom', url: 'https://web.telegram.org/k/#?tgaddr=tg%3A%2F%2Fresolve%3Fdomain%3Dsticker_bot%26startapp' }]
       ]
     }
   }).catch(error => {
@@ -1186,7 +1242,7 @@ function sendCollectionsChangeNotification(chatId, changes, newCollections) {
         reply_markup: {
           inline_keyboard: [
             [{ text: '📋 Список коллекций', callback_data: 'collections_1' }],
-            [{ text: '📲 Открыть StickerDom', url: 'https://t.me/sticker_bot/app' }]
+            [{ text: '📲 Открыть StickerDom', url: 'https://web.telegram.org/k/#?tgaddr=tg%3A%2F%2Fresolve%3Fdomain%3Dsticker_bot%26startapp' }]
           ]
         }
       });
@@ -1259,11 +1315,7 @@ function formatDifferences(differences) {
   return message || 'Не удалось определить конкретные изменения';
 }
 
-// Добавляем middleware для парсинга тела запроса
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// Обработчик для корневого URL - приветственная страница
+// Заменяем обработчик для корневого URL с простого на HTML-страницу
 app.get('/', (req, res) => {
   const html = `
 <!DOCTYPE html>
@@ -1392,7 +1444,7 @@ app.get('/', (req, res) => {
     <div class="cta">
       <h2>Начните использовать бота прямо сейчас</h2>
       <p>Присоединяйтесь к тысячам пользователей, которые уже получают уведомления о новых коллекциях стикеров!</p>
-      <a href="https://t.me/sticker_bot" class="btn">Открыть бота в Telegram</a>
+      <a href="https://t.me/qstickerscheckbot" class="btn">Открыть бота в Telegram</a>
     </div>
     
     <footer>
@@ -1407,7 +1459,7 @@ app.get('/', (req, res) => {
 });
 
 // Запуск сервера
-app.listen(port, () => {
-  console.log(`Сервер запущен на порту ${port}`);
-  console.log(`CORS настроен для домена: https://stickerdom.store`);
+app.listen(port, '0.0.0.0', () => {
+  console.log(`Сервер запущен на 0.0.0.0:${port}`);
+  console.log(`CORS настроен для всех доменов (в режиме разработки)`);
 }); 
