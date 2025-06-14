@@ -1259,6 +1259,153 @@ function formatDifferences(differences) {
   return message || 'Не удалось определить конкретные изменения';
 }
 
+// Добавляем middleware для парсинга тела запроса
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Обработчик для корневого URL - приветственная страница
+app.get('/', (req, res) => {
+  const html = `
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StickerBot - Telegram бот для уведомлений о стикерах</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      margin: 0;
+      padding: 0;
+      background-color: #f5f5f5;
+      color: #333;
+      line-height: 1.6;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    header {
+      background-color: #0088cc;
+      color: white;
+      padding: 20px 0;
+      text-align: center;
+      border-radius: 8px;
+      margin-bottom: 30px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 36px;
+    }
+    h2 {
+      color: #0088cc;
+      border-bottom: 2px solid #eee;
+      padding-bottom: 10px;
+      margin-top: 30px;
+    }
+    .features {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      margin: 30px 0;
+    }
+    .feature {
+      background: white;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+      width: calc(50% - 15px);
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      box-sizing: border-box;
+    }
+    .feature h3 {
+      color: #0088cc;
+      margin-top: 0;
+    }
+    .cta {
+      text-align: center;
+      background-color: white;
+      padding: 30px;
+      border-radius: 8px;
+      margin: 30px 0;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    .btn {
+      display: inline-block;
+      background-color: #0088cc;
+      color: white;
+      padding: 12px 25px;
+      border-radius: 5px;
+      text-decoration: none;
+      font-weight: bold;
+      transition: background-color 0.3s;
+    }
+    .btn:hover {
+      background-color: #006699;
+    }
+    footer {
+      text-align: center;
+      margin-top: 40px;
+      padding: 20px;
+      color: #666;
+      font-size: 14px;
+    }
+    @media (max-width: 768px) {
+      .feature {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>StickerBot</h1>
+      <p>Telegram бот для уведомлений о новых стикерах StickerDom</p>
+    </header>
+    
+    <section>
+      <h2>О боте</h2>
+      <p>StickerBot — это бот, который уведомляет вас о новых коллекциях стикеров и их обновлениях. Подписавшись на уведомления, вы всегда будете в курсе свежих релизов на платформе StickerDom.</p>
+    </section>
+    
+    <section class="features">
+      <div class="feature">
+        <h3>🔔 Мгновенные уведомления</h3>
+        <p>Получайте уведомления о новых коллекциях стикеров сразу после их добавления.</p>
+      </div>
+      <div class="feature">
+        <h3>📋 Список коллекций</h3>
+        <p>Просматривайте список доступных коллекций прямо в чате с ботом.</p>
+      </div>
+      <div class="feature">
+        <h3>🔍 Поиск коллекций</h3>
+        <p>Быстрый поиск нужной коллекции по названию или ключевым словам.</p>
+      </div>
+      <div class="feature">
+        <h3>📊 Статус подписки</h3>
+        <p>Управляйте своими подписками и настраивайте получение уведомлений.</p>
+      </div>
+    </section>
+    
+    <div class="cta">
+      <h2>Начните использовать бота прямо сейчас</h2>
+      <p>Присоединяйтесь к тысячам пользователей, которые уже получают уведомления о новых коллекциях стикеров!</p>
+      <a href="https://t.me/sticker_bot" class="btn">Открыть бота в Telegram</a>
+    </div>
+    
+    <footer>
+      <p>&copy; ${new Date().getFullYear()} StickerBot. Все права защищены.</p>
+    </footer>
+  </div>
+</body>
+</html>
+  `;
+  
+  res.send(html);
+});
+
 // Запуск сервера
 app.listen(port, () => {
   console.log(`Сервер запущен на порту ${port}`);
