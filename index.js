@@ -19,6 +19,11 @@ app.use(express.urlencoded({ extended: true }));
 // Настройка CORS - разрешаем все источники для тестирования
 app.use(cors());
 
+// Специальный маршрут для проверки деплоя, который будет отвечать немедленно
+app.get('/deploy-check', (req, res) => {
+  res.status(200).send('DEPLOY_OK');
+});
+
 // Обработчик для корневого URL - должен быть определен в начале для проверки развертывания
 app.get('/', (req, res) => {
   res.send('StickerBot API работает!');
@@ -166,36 +171,6 @@ function saveData(data) {
     console.error('Ошибка при сохранении данных в файл:', error);
     return false;
   }
-}
-
-// Загружаем ID чатов при запуске
-loadChatIds();
-
-// Загружаем данные из файла и помещаем в кеш
-const savedData = loadData();
-if (savedData) {
-  cache.set('lastData', savedData);
-  
-  // Устанавливаем начальное время последнего обновления данных
-  const initialTimestamp = Date.now();
-  const initialFormattedTime = new Date(initialTimestamp).toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    timeZone: 'Europe/Moscow'
-  });
-  
-  cache.set('lastUpdateTime', {
-    timestamp: initialTimestamp,
-    formatted: initialFormattedTime
-  });
-  
-  console.log(`Установлено начальное время последнего обновления данных: ${initialFormattedTime}`);
-  
-  console.log('Данные из файла загружены в кеш');
 }
 
 // Функция для форматирования данных коллекции стикеров
@@ -1710,48 +1685,104 @@ function checkDataFreshness() {
   }
 }
 
-// Запуск сервера
-http.createServer(app).listen(port, '0.0.0.0', () => {
-  console.log(`Сервер запущен на порту ${port}`);
-  console.log(`CORS настроен для всех доменов (в режиме разработки)`);
-  
-  // Устанавливаем интервал для проверки свежести данных (каждую минуту)
-  setInterval(checkDataFreshness, 60000);
-  console.log('Запущена периодическая проверка свежести данных');
-  
-  console.log('Бот запущен и готов к работе!');
-});
+// Добавим явную инициализацию приложения перед запуском серверов
+function initializeApp() {
+  // Загружаем ID чатов при запуске
+  loadChatIds();
 
-// Проверяем наличие SSL сертификатов для HTTPS
-const sslPath = path.join(__dirname, 'ssl');
-const privateKeyPath = path.join(sslPath, 'privkey.pem');
-const certificatePath = path.join(sslPath, 'cert.pem');
-const chainPath = path.join(sslPath, 'chain.pem');
-
-// Если есть сертификаты, запускаем HTTPS сервер
-try {
-  if (fs.existsSync(privateKeyPath) && fs.existsSync(certificatePath)) {
-    const httpsOptions = {
-      key: fs.readFileSync(privateKeyPath),
-      cert: fs.readFileSync(certificatePath)
-    };
+  // Загружаем данные из файла и помещаем в кеш
+  const savedData = loadData();
+  if (savedData) {
+    cache.set('lastData', savedData);
     
-    // Добавляем цепочку сертификатов, если она существует
-    if (fs.existsSync(chainPath)) {
-      httpsOptions.ca = fs.readFileSync(chainPath);
-    }
-    
-    https.createServer(httpsOptions, app).listen(443, '0.0.0.0', () => {
-      console.log('HTTPS сервер запущен на порту 443');
+    // Устанавливаем начальное время последнего обновления данных
+    const initialTimestamp = Date.now();
+    const initialFormattedTime = new Date(initialTimestamp).toLocaleString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      timeZone: 'Europe/Moscow'
     });
-  } else {
-    console.log('SSL сертификаты не найдены. HTTPS сервер не запущен.');
-    console.log('Для запуска HTTPS сервера создайте директорию ssl и поместите туда сертификаты:');
-    console.log('- privkey.pem (приватный ключ)');
-    console.log('- cert.pem (сертификат)');
-    console.log('- chain.pem (цепочка сертификатов, опционально)');
+    
+    cache.set('lastUpdateTime', {
+      timestamp: initialTimestamp,
+      formatted: initialFormattedTime
+    });
+    
+    console.log(`Установлено начальное время последнего обновления данных: ${initialFormattedTime}`);
+    console.log('Данные из файла загружены в кеш');
   }
-} catch (error) {
-  console.error('Ошибка при настройке HTTPS сервера:', error.message);
-  console.log('Приложение продолжит работу только по HTTP');
-} 
+
+  // Сначала запускаем HTTP сервер
+  console.log('Запуск HTTP сервера...');
+  http.createServer(app).listen(port, '0.0.0.0', () => {
+    console.log(`HTTP сервер запущен на порту ${port}`);
+    console.log(`CORS настроен для всех доменов (в режиме разработки)`);
+    
+    // Устанавливаем интервал для проверки свежести данных (каждую минуту)
+    setInterval(checkDataFreshness, 60000);
+    console.log('Запущена периодическая проверка свежести данных');
+    
+    console.log('Бот запущен и готов к работе!');
+    
+    // Затем, с небольшой задержкой, пытаемся запустить HTTPS сервер
+    setTimeout(initializeHttpsServer, 1000);
+  });
+}
+
+// Функция для инициализации HTTPS сервера
+function initializeHttpsServer() {
+  console.log('Проверка наличия SSL сертификатов для HTTPS...');
+  
+  // Проверяем наличие SSL сертификатов для HTTPS
+  const sslPath = path.join(__dirname, 'ssl');
+  const privateKeyPath = path.join(sslPath, 'privkey.pem');
+  const certificatePath = path.join(sslPath, 'cert.pem');
+  const chainPath = path.join(sslPath, 'chain.pem');
+
+  // Функция для проверки, что файл существует и не пустой
+  function isValidFile(filePath) {
+    try {
+      if (!fs.existsSync(filePath)) return false;
+      const stats = fs.statSync(filePath);
+      return stats.size > 0;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Если есть сертификаты, запускаем HTTPS сервер
+  try {
+    if (isValidFile(privateKeyPath) && isValidFile(certificatePath)) {
+      const httpsOptions = {
+        key: fs.readFileSync(privateKeyPath),
+        cert: fs.readFileSync(certificatePath)
+      };
+      
+      // Добавляем цепочку сертификатов, если она существует
+      if (isValidFile(chainPath)) {
+        httpsOptions.ca = fs.readFileSync(chainPath);
+      }
+      
+      https.createServer(httpsOptions, app).listen(443, '0.0.0.0', () => {
+        console.log('HTTPS сервер запущен на порту 443');
+      });
+    } else {
+      console.log('SSL сертификаты не найдены или пусты. HTTPS сервер не запущен.');
+      console.log('Для запуска HTTPS сервера создайте директорию ssl и поместите туда сертификаты:');
+      console.log('- privkey.pem (приватный ключ)');
+      console.log('- cert.pem (сертификат)');
+      console.log('- chain.pem (цепочка сертификатов, опционально)');
+    }
+  } catch (error) {
+    console.error('Ошибка при настройке HTTPS сервера:', error.message);
+    console.log('Приложение продолжит работу только по HTTP');
+  }
+}
+
+// Запускаем приложение с небольшой задержкой, чтобы дать системе деплоя время на настройку
+console.log('Запуск приложения через 2 секунды...');
+setTimeout(initializeApp, 2000);

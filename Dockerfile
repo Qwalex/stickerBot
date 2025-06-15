@@ -16,7 +16,10 @@ COPY . .
 RUN touch chatIds.json && \
     echo '{"chatIds":[]}' > chatIds.json && \
     chmod 755 chatIds.json && \
-    mkdir -p ssl
+    mkdir -p ssl && \
+    touch ssl/privkey.pem && \
+    touch ssl/cert.pem && \
+    touch ssl/chain.pem
 
 # Открываем порт, на котором работает приложение (внутренний порт 3001, снаружи будет доступен на 80)
 EXPOSE 3001
