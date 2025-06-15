@@ -6,6 +6,8 @@ const deepEqual = require('deep-equal');
 const fs = require('fs');
 const path = require('path');
 const cors = require('cors');
+const http = require('http');
+const https = require('https');
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -31,8 +33,8 @@ app.get('/health', (req, res) => {
 const chatIdsFilePath = path.join(__dirname, 'chatIds.json');
 const dataFilePath = path.join(__dirname, 'data.json');
 
-// ID администраторов бота (для доступа к команде /chats)
-const adminIds = [];
+// ID администраторов бота (для доступа к командам администрирования и получения уведомлений об ошибках)
+const adminIds = [360259692];
 
 // Инициализация кеша
 const cache = new NodeCache({ stdTTL: 0, checkperiod: 0 }); // Бесконечное время хранения
@@ -41,6 +43,10 @@ const cache = new NodeCache({ stdTTL: 0, checkperiod: 0 }); // Бесконеч�
 const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
 let chatIds = [];
 let bot = null;
+
+// Флаг для отслеживания статуса уведомления о неактуальных данных
+let updateAlertSent = false;
+const UPDATE_INTERVAL_MS = 5 * 60 * 1000; // 5 минут в миллисекундах
 
 // Создаем основные кнопки меню
 const mainMenuButtons = {
@@ -164,6 +170,26 @@ loadChatIds();
 const savedData = loadData();
 if (savedData) {
   cache.set('lastData', savedData);
+  
+  // Устанавливаем начальное время последнего обновления данных
+  const initialTimestamp = Date.now();
+  const initialFormattedTime = new Date(initialTimestamp).toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZone: 'Europe/Moscow'
+  });
+  
+  cache.set('lastUpdateTime', {
+    timestamp: initialTimestamp,
+    formatted: initialFormattedTime
+  });
+  
+  console.log(`Установлено начальное время последнего обновления данных: ${initialFormattedTime}`);
+  
   console.log('Данные из файла загружены в кеш');
 }
 
@@ -559,13 +585,29 @@ if (telegramToken) {
         break;
         
       case '📊 Статус подписки':
+        // Получаем информацию о последнем обновлении
+        const lastUpdateInfo = cache.get('lastUpdateTime');
+        const lastUpdateMsg = lastUpdateInfo 
+          ? `\n\n📅 Последнее обновление данных: ${lastUpdateInfo.formatted}` 
+          : '\n\n❓ Информация о последнем обновлении недоступна';
+        
+        const lastData = cache.get('lastData');
+        const collectionsCount = lastData && lastData.data && Array.isArray(lastData.data) 
+          ? `\n📊 Количество коллекций: ${lastData.data.length}`
+          : '';
+        
         if (chatIds.includes(chatId)) {
-          bot.sendMessage(chatId, 'Вы подписаны на уведомления об изменениях в коллекциях.');
+          bot.sendMessage(
+            chatId, 
+            `✅ Вы подписаны на уведомления об изменениях в коллекциях.${collectionsCount}${lastUpdateMsg}`,
+            { parse_mode: 'HTML' }
+          );
         } else {
           bot.sendMessage(
             chatId, 
-            'Вы не подписаны на уведомления. Используйте /start для подписки.',
+            `❌ Вы не подписаны на уведомления. Используйте /start для подписки.${collectionsCount}${lastUpdateMsg}`,
             {
+              parse_mode: 'HTML',
               reply_markup: {
                 inline_keyboard: [
                   [{ text: 'Подписаться на уведомления', callback_data: 'subscribe' }]
@@ -809,6 +851,47 @@ if (telegramToken) {
 
 // API эндпоинты
 
+// Эндпоинт для пинга (проверки работоспособности сервиса со статистикой)
+app.get('/api/ping', (req, res) => {
+  try {
+    const lastUpdateInfo = cache.get('lastUpdateTime');
+    const currentTime = Date.now();
+    const timeDiff = lastUpdateInfo ? currentTime - lastUpdateInfo.timestamp : null;
+    
+    // Проверяем свежесть данных
+    const dataStatus = !lastUpdateInfo ? 'unknown' : 
+                      (timeDiff > UPDATE_INTERVAL_MS ? 'stale' : 'fresh');
+    
+    // Количество коллекций
+    const lastData = cache.get('lastData');
+    const collectionsCount = lastData && lastData.data && Array.isArray(lastData.data) 
+                             ? lastData.data.length : 0;
+    
+    // Статус бота (для демонстрации, всегда активен если может ответить на запрос)
+    const botActive = !!bot;
+    
+    // Формируем ответ
+    return res.status(200).json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      dataStatus,
+      dataLastUpdate: lastUpdateInfo ? lastUpdateInfo.formatted : null,
+      collectionsCount,
+      botActive,
+      chatIdsCount: chatIds.length,
+      adminIdsCount: adminIds.length,
+      updateAlertActive: updateAlertSent
+    });
+  } catch (error) {
+    console.error('Ошибка при запросе ping:', error);
+    return res.status(500).json({ 
+      status: 'error', 
+      message: 'Внутренняя ошибка сервера',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // Эндпоинт для приема данных
 app.post('/api/data', (req, res) => {
   try {
@@ -825,10 +908,42 @@ app.post('/api/data', (req, res) => {
     if (!oldData) {
       cache.set(key, data);
       
+      // Обновляем время последнего обновления в более подробном формате
+      const updateTimestamp = Date.now();
+      const formattedUpdateTime = new Date(updateTimestamp).toLocaleString('ru-RU', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        timeZone: 'Europe/Moscow'
+      });
+      
+      // Сохраняем информацию о последнем обновлении
+      cache.set('lastUpdateTime', {
+        timestamp: updateTimestamp,
+        formatted: formattedUpdateTime
+      });
+      
+      console.log(`Обновление времени получения данных: ${formattedUpdateTime} (первичное сохранение)`);
+      
+      // Сбрасываем флаг предупреждения, если он был активен
+      if (updateAlertSent) {
+        updateAlertSent = false;
+        console.log('Сброшен флаг уведомления о неактуальных данных');
+      }
+      
       // Сохраняем данные в файл
       saveData(data);
       
-      return res.status(200).json({ success: true, message: 'Данные успешно получены и сохранены впервые' });
+      return res.status(200).json({ 
+        success: true, 
+        message: 'Данные успешно получены и сохранены впервые',
+        updateTimestamp,
+        formattedUpdateTime,
+        collectionsCount: data.data && Array.isArray(data.data) ? data.data.length : 0
+      });
     }
 
     // Сравниваем новые данные с кешированными
@@ -838,19 +953,77 @@ app.post('/api/data', (req, res) => {
       
       // Обновляем кеш и сохраняем в файл
       cache.set(key, data);
+      
+      // Обновляем время последнего обновления в более подробном формате
+      const updateTimestamp = Date.now();
+      const formattedUpdateTime = new Date(updateTimestamp).toLocaleString('ru-RU', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        timeZone: 'Europe/Moscow'
+      });
+      
+      // Сохраняем информацию о последнем обновлении
+      cache.set('lastUpdateTime', {
+        timestamp: updateTimestamp,
+        formatted: formattedUpdateTime
+      });
+      
+      console.log(`Обновление времени получения данных: ${formattedUpdateTime} (обнаружены изменения)`);
+      
+      // Сбрасываем флаг предупреждения, если он был активен
+      if (updateAlertSent) {
+        updateAlertSent = false;
+        console.log('Сброшен флаг уведомления о неактуальных данных');
+      }
+      
       saveData(data);
       
       return res.status(200).json({ 
         success: true, 
         message: 'Данные изменились, отправлено уведомление',
-        changes: changes
+        changes: changes,
+        updateTimestamp,
+        formattedUpdateTime,
+        collectionsCount: data.data.length
       });
     }
 
     // Если данные не изменились
+    // Обновляем время последнего обновления даже если данные не изменились
+    const updateTimestamp = Date.now();
+    const formattedUpdateTime = new Date(updateTimestamp).toLocaleString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      timeZone: 'Europe/Moscow'
+    });
+    
+    // Сохраняем информацию о последнем обновлении
+    cache.set('lastUpdateTime', {
+      timestamp: updateTimestamp,
+      formatted: formattedUpdateTime
+    });
+    
+    console.log(`Обновление времени получения данных: ${formattedUpdateTime} (данные не изменились)`);
+    
+    // Сбрасываем флаг предупреждения, если он был активен
+    if (updateAlertSent) {
+      updateAlertSent = false;
+      console.log('Сброшен флаг уведомления о неактуальных данных');
+    }
+    
     return res.status(200).json({ 
       success: true, 
-      message: 'Данные получены, изменений не обнаружено'
+      message: 'Данные получены, изменений не обнаружено',
+      updateTimestamp,
+      formattedUpdateTime
     });
   } catch (error) {
     console.error('Ошибка при обработке запроса:', error);
@@ -925,8 +1098,32 @@ app.get('/api/cache', (req, res) => {
   }
 });
 
-// Функция для обработки изменений в данных и отправки уведомлений
+  // Функция для обработки изменений в данных и отправки уведомлений
 function processDataChanges(oldData, newData) {
+  // Обновляем время последнего обновления в более подробном формате
+  const updateTimestamp = Date.now();
+  const formattedUpdateTime = new Date(updateTimestamp).toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZone: 'Europe/Moscow'
+  });
+  
+  // Сохраняем информацию о последнем обновлении
+  cache.set('lastUpdateTime', {
+    timestamp: updateTimestamp,
+    formatted: formattedUpdateTime
+  });
+  
+  // Сбрасываем флаг предупреждения, если он был активен
+  if (updateAlertSent) {
+    updateAlertSent = false;
+    console.log('Сброшен флаг уведомления о неактуальных данных');
+  }
+  
   // Проверяем, есть ли данные коллекций
   if (oldData.data && newData.data && Array.isArray(oldData.data) && Array.isArray(newData.data)) {
     // Проверяем, действительно ли изменились данные или только порядок элементов
@@ -1458,8 +1655,93 @@ app.get('/', (req, res) => {
   res.send(html);
 });
 
+// Функция проверки свежести данных и отправки уведомления
+function checkDataFreshness() {
+  // Получаем информацию о времени последнего обновления
+  const lastUpdateInfo = cache.get('lastUpdateTime');
+  
+  if (!lastUpdateInfo) {
+    console.log('Нет информации о времени последнего обновления данных');
+    return;
+  }
+  
+  const currentTime = Date.now();
+  const timeDiff = currentTime - lastUpdateInfo.timestamp;
+  
+  // Если прошло больше установленного интервала с момента последнего обновления
+  if (timeDiff > UPDATE_INTERVAL_MS) {
+    // Если уведомление еще не было отправлено
+    if (!updateAlertSent && bot) {
+      // Формируем текст уведомления
+      const minutesPassed = Math.floor(timeDiff / 60000);
+      const message = `⚠️ *ПРЕДУПРЕЖДЕНИЕ!* ⚠️\n\nДанные не обновлялись уже ${minutesPassed} минут (последнее обновление: ${lastUpdateInfo.formatted}).\n\nВозможны проблемы с API или источником данных.`;
+      
+      // Отправляем уведомление администраторам
+      if (adminIds.length > 0) {
+        adminIds.forEach(adminId => {
+          bot.sendMessage(adminId, message, { parse_mode: 'Markdown' })
+            .then(() => console.log(`Отправлено уведомление о неактуальных данных администратору ${adminId}`))
+            .catch(err => console.error(`Не удалось отправить уведомление администратору ${adminId}:`, err));
+        });
+      } else {
+        // Если администраторы не указаны, отправляем всем подписанным пользователям
+        chatIds.forEach(chatId => {
+          bot.sendMessage(chatId, message, { parse_mode: 'Markdown' })
+            .then(() => console.log(`Отправлено уведомление о неактуальных данных в чат ${chatId}`))
+            .catch(err => console.error(`Не удалось отправить уведомление в чат ${chatId}:`, err));
+        });
+      }
+      
+      // Устанавливаем флаг, что уведомление было отправлено
+      updateAlertSent = true;
+      console.log('Отправлено уведомление о неактуальных данных');
+    }
+  } else {
+    // Сбрасываем флаг, если данные снова начали обновляться
+    if (updateAlertSent) {
+      updateAlertSent = false;
+      console.log('Сброшен флаг уведомления о неактуальных данных');
+    }
+  }
+}
+
 // Запуск сервера
-app.listen(port, '0.0.0.0', () => {
-  console.log(`Сервер запущен на 0.0.0.0:${port}`);
+http.createServer(app).listen(port, '0.0.0.0', () => {
+  console.log(`Сервер запущен на порту ${port}`);
   console.log(`CORS настроен для всех доменов (в режиме разработки)`);
-}); 
+  
+  // Устанавливаем интервал для проверки свежести данных (каждую минуту)
+  setInterval(checkDataFreshness, 60000);
+  console.log('Запущена периодическая проверка свежести данных');
+  
+  console.log('Бот запущен и готов к работе!');
+});
+
+// Проверяем наличие SSL сертификатов для HTTPS
+const sslPath = path.join(__dirname, 'ssl');
+const privateKeyPath = path.join(sslPath, 'privkey.pem');
+const certificatePath = path.join(sslPath, 'cert.pem');
+const chainPath = path.join(sslPath, 'chain.pem');
+
+// Если есть сертификаты, запускаем HTTPS сервер
+if (fs.existsSync(privateKeyPath) && fs.existsSync(certificatePath)) {
+  const httpsOptions = {
+    key: fs.readFileSync(privateKeyPath),
+    cert: fs.readFileSync(certificatePath)
+  };
+  
+  // Добавляем цепочку сертификатов, если она существует
+  if (fs.existsSync(chainPath)) {
+    httpsOptions.ca = fs.readFileSync(chainPath);
+  }
+  
+  https.createServer(httpsOptions, app).listen(443, '0.0.0.0', () => {
+    console.log('HTTPS сервер запущен на порту 443');
+  });
+} else {
+  console.log('SSL сертификаты не найдены. HTTPS сервер не запущен.');
+  console.log('Для запуска HTTPS сервера создайте директорию ssl и поместите туда сертификаты:');
+  console.log('- privkey.pem (приватный ключ)');
+  console.log('- cert.pem (сертификат)');
+  console.log('- chain.pem (цепочка сертификатов, опционально)');
+} 

@@ -9,6 +9,7 @@ services:
     restart: unless-stopped
     ports:
       - "80:3001"
+      - "443:443"
     environment:
       - PORT=3001
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
