@@ -23,7 +23,12 @@ RUN touch chatIds.json && \
 
 # Открываем порт, на котором работает приложение (внутренний порт 3001, снаружи будет доступен на 80)
 EXPOSE 3001
+EXPOSE 3002
 EXPOSE 443
 
+# Создаем скрипт для запуска
+RUN echo '#!/bin/sh\nnode deploy-check-server.js &\nnode index.js' > start.sh && \
+    chmod +x start.sh
+
 # Запускаем приложение
-CMD ["node", "index.js"] 
+CMD ["./start.sh"] 
