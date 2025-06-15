@@ -24,6 +24,11 @@ app.get('/', (req, res) => {
   res.send('StickerBot API работает!');
 });
 
+// Специальный маршрут для проверки готовности приложения при деплое
+app.get('/ready', (req, res) => {
+  res.status(200).send('OK');
+});
+
 // Проверка здоровья системы для мониторинга
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -1724,24 +1729,29 @@ const certificatePath = path.join(sslPath, 'cert.pem');
 const chainPath = path.join(sslPath, 'chain.pem');
 
 // Если есть сертификаты, запускаем HTTPS сервер
-if (fs.existsSync(privateKeyPath) && fs.existsSync(certificatePath)) {
-  const httpsOptions = {
-    key: fs.readFileSync(privateKeyPath),
-    cert: fs.readFileSync(certificatePath)
-  };
-  
-  // Добавляем цепочку сертификатов, если она существует
-  if (fs.existsSync(chainPath)) {
-    httpsOptions.ca = fs.readFileSync(chainPath);
+try {
+  if (fs.existsSync(privateKeyPath) && fs.existsSync(certificatePath)) {
+    const httpsOptions = {
+      key: fs.readFileSync(privateKeyPath),
+      cert: fs.readFileSync(certificatePath)
+    };
+    
+    // Добавляем цепочку сертификатов, если она существует
+    if (fs.existsSync(chainPath)) {
+      httpsOptions.ca = fs.readFileSync(chainPath);
+    }
+    
+    https.createServer(httpsOptions, app).listen(443, '0.0.0.0', () => {
+      console.log('HTTPS сервер запущен на порту 443');
+    });
+  } else {
+    console.log('SSL сертификаты не найдены. HTTPS сервер не запущен.');
+    console.log('Для запуска HTTPS сервера создайте директорию ssl и поместите туда сертификаты:');
+    console.log('- privkey.pem (приватный ключ)');
+    console.log('- cert.pem (сертификат)');
+    console.log('- chain.pem (цепочка сертификатов, опционально)');
   }
-  
-  https.createServer(httpsOptions, app).listen(443, '0.0.0.0', () => {
-    console.log('HTTPS сервер запущен на порту 443');
-  });
-} else {
-  console.log('SSL сертификаты не найдены. HTTPS сервер не запущен.');
-  console.log('Для запуска HTTPS сервера создайте директорию ssl и поместите туда сертификаты:');
-  console.log('- privkey.pem (приватный ключ)');
-  console.log('- cert.pem (сертификат)');
-  console.log('- chain.pem (цепочка сертификатов, опционально)');
+} catch (error) {
+  console.error('Ошибка при настройке HTTPS сервера:', error.message);
+  console.log('Приложение продолжит работу только по HTTP');
 } 
