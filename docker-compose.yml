@@ -8,7 +8,7 @@ services:
     container_name: stickerbot
     restart: unless-stopped
     ports:
-      - "80:3001"
+      - "3001:3001"
       - "443:443"
     environment:
       - PORT=3001
