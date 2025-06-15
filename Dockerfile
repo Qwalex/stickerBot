@@ -15,20 +15,11 @@ COPY . .
 # Создаем необходимые файлы и директории
 RUN touch chatIds.json && \
     echo '{"chatIds":[]}' > chatIds.json && \
-    chmod 755 chatIds.json && \
-    mkdir -p ssl && \
-    touch ssl/privkey.pem && \
-    touch ssl/cert.pem && \
-    touch ssl/chain.pem
+    chmod 755 chatIds.json
 
 # Открываем порт, на котором работает приложение (внутренний порт 3001, снаружи будет доступен на 80)
 EXPOSE 3001
-EXPOSE 3002
 EXPOSE 443
 
-# Создаем скрипт для запуска
-RUN echo '#!/bin/sh\nnode deploy-check-server.js &\nnode index.js' > start.sh && \
-    chmod +x start.sh
-
 # Запускаем приложение
-CMD ["./start.sh"] 
+CMD ["node", "index.js"] 

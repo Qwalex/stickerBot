@@ -9,16 +9,8 @@ services:
     restart: unless-stopped
     ports:
       - "80:3001"
-      - "3001:3001"
-      - "3002:3002"
       - "443:443"
     environment:
       - PORT=3001
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3002/"]
-      interval: 5s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
     # Без использования volumes, как указано в требованиях 
